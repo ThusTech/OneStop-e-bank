@@ -2,7 +2,7 @@ from passlib.context import CryptContext
 from datetime import datetime, timedelta
 from typing import Union, Any
 from jose import jwt
-from fastapi import HTTPException
+from fastapi import HTTPException,Response,status,Request,Depends
 from .models import Token, Register, Login
 from .database import default_user
 
@@ -15,7 +15,7 @@ def get_hashed_password(password: str) -> str:
 def verify_password(password: str, hashed_password: str) -> bool:
     return password_context.verify(password, hashed_password)
 
-async def authenticate_user(login: Login):
+async def authenticate_user(response: Response,login: Login):
 
     hashed_password = get_hashed_password(password="12345")
     user = Login(email="student1@wethinkcode.co.za",password=hashed_password)
@@ -26,41 +26,54 @@ async def authenticate_user(login: Login):
     if not verify_password(password=login.password, hashed_password=user.password):
         return HTTPException(status_code=401, detail="Invalid Password or/and Email")
     
-    access_token, expires_in = create_access_token(email=login.email)
+    access_token = create_access_token(email=login.email)
 
-    # refresh token
-    # refresh_token = create_refresh_token()
+    refresh_token = create_refresh_token(email=login.email)
     
-    # login.set_cookie(
-    #     key="refresh_token",
-    #     value=refresh_token,
-    #     httponly=True,
-    #     secure=True,
-    #     samesite="Lax"
-    # )
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=True,
+        samesite="lax"
+    )
     
-    return Token(access_token=access_token, token_type="bearer", expires_in=expires_in)
-
-def validate_tokens():
-    # Check if access_token, and refresh_token are expired
-    # If access_token is expired: Create another token using refresh token
-    # If both access_token and refresh token are expired, tell the user to login again
-    pass
+    return Token(access_token=access_token, token_type="bearer")
 
 def create_access_token(email: str):
-    token = jwt.encode({"email":email}, "secret_key", algorithm="HS256")
     expires_in = (datetime.now() + timedelta(minutes=15)).ctime()
 
-    return token, expires_in
+    token = jwt.encode({"email":email, "exp": expires_in}, "JWT_SECRET", algorithm="HS256")
 
-def create_refresh_token():
-    # token = jwt.encode({"email":email}, "secret_key", algorithm="HS256")
-    expires_in = (datetime.now() + timedelta(hours=24)).ctime()
-    # return refresh_token, expires_in
+    return token
 
+def create_refresh_token(email: str):
+    expires_in = (datetime.now() + timedelta(days=3)).ctime()
+
+    refresh_token = jwt.encode({"email":email, "exp": expires_in}, "REFRESH_TOKEN_SECRET", algorithm="HS256")
+
+    return refresh_token
+
+async def refresh_access_token(response: Response, request: Request):
+    refresh_token = request.cookies.get("refresh_token")
+
+    if not refresh_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token not found")
+        
+    try:
+        payload = jwt.decode(refresh_token, "REFRESH_TOKEN_SECRET", algorithms=["HS256"])
+        email = payload.get("email")
+
+        new_access_token = create_access_token(email=email)
+
+        return Token(access_token=new_access_token, token_type="bearer")
+    except:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token has expired")
     
-    
-    # return token, expires_in
+async def invalidate_token(response: Response):
+    response.delete_cookie(key="refresh_token")
+
+    return Response(status_code=status.HTTP_200_OK,content="Sucessfully logged out")
 
 async def register_new_user(register: Register):
     # Check if email/username is not in the db
